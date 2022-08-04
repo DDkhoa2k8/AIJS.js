@@ -1,7 +1,60 @@
 var LIB = {
     gpuMode:false
 }
-///
+const lE = (function machineIsLittleEndian() {
+	const uint8Array = new Uint8Array([0xAA, 0xBB]);
+	const uint16array = new Uint16Array(uint8Array.buffer);
+	return uint16array[0] === 0xBBAA;
+})();
+var TNT = 
+		`ivec4 floatsToBytes(vec4 inputFloats, bool littleEndian) {
+			ivec4 bytes = ivec4(inputFloats * 255.0);
+			return (
+				littleEndian
+				? bytes.abgr
+				: bytes
+			);
+		}
+		float shiftRight (float v, float amt) {
+			v = floor(v) + 0.5;
+			return floor(v / exp2(amt));
+		}
+		float shiftLeft (float v, float amt) {
+			return floor(v * exp2(amt) + 0.5);
+		}
+		float maskLast (float v, float bits) {
+			return mod(v, shiftLeft(1.0, bits));
+		}
+		float extractBits (float num, float from, float to) {
+			from = floor(from + 0.5); to = floor(to + 0.5);
+			return maskLast(shiftRight(num, from), to - from);
+		}
+		vec4 floatToRgba(float texelFloat, bool littleEndian) {
+			if (texelFloat == 0.0) return vec4(0, 0, 0, 0);
+			float sign = texelFloat > 0.0 ? 0.0 : 1.0;
+			texelFloat = abs(texelFloat);
+			float exponent = floor(log2(texelFloat));
+			float biased_exponent = exponent + 127.0;
+			float fraction = ((texelFloat / exp2(exponent)) - 1.0) * 8388608.0;
+			float t = biased_exponent / 2.0;
+			float last_bit_of_biased_exponent = fract(t) * 2.0;
+			float remaining_bits_of_biased_exponent = floor(t);
+			float byte4 = extractBits(fraction, 0.0, 8.0) / 255.0;
+			float byte3 = extractBits(fraction, 8.0, 16.0) / 255.0;
+			float byte2 = (last_bit_of_biased_exponent * 128.0 + extractBits(fraction, 16.0, 23.0)) / 255.0;
+			float byte1 = (sign * 128.0 + remaining_bits_of_biased_exponent) / 255.0;
+			return (
+				littleEndian
+				? vec4(byte4, byte3, byte2, byte1)
+				: vec4(byte1, byte2, byte3, byte4)
+			);
+		}
+		float rgbaToFloat(vec4 texelRGBA, bool littleEndian) {
+			ivec4 rgbaBytes = floatsToBytes(texelRGBA, littleEndian);
+			bool bits[32];
+			bytesToBits(rgbaBytes, bits);
+			return bitsToFloat(bits);
+		}`;
 var GPU = {
 	setupGPU:(fragment,set,w,h) => {
 		//get webGL context
@@ -189,30 +242,12 @@ function ANN(lr,mo,act) {
 		frag = `
 			precision highp float;
 			precision highp int;
-			vec4 encode_float(float v) {
-				if (v == 0.0) { 
-					return vec4(0.0,0.0,0.0,0.0);
-				} 
-				float a = abs(v),
-				exp = floor(log2(a)),
-				mant = (a * pow(2.0,23.0 - exp)),
-				mant1 = floor(mant / 256.0 / 256.0),
-				mant2 = mod(floor(mant / 256.0),256.0),
-				mant3 = mod(mant,256.0),
-				sign = 128.0-128.0 * (a / v),
-				e = (sign + exp + 127.0) / 510.0,
-				m1 = (mant1 - (128.0 * (1.0 - mod(exp + 127.0,2.0)))) / 255.0,
-				m2 = (mant2) / 255.0,
-				m3 = (mant3 + 0.5) / 255.0;
-				return vec4(m3,m2,m1,e); 
-			}
-			float decode_float(vec4 v) {
-				vec4 bits = v * 255.0;
-				float sign = mix(-1.0, 1.0, step(bits[3], 128.0)),
-				expo = floor(mod(bits[3] + 0.1, 128.0)) * 2.0 + floor((bits[2] + 0.1) / 128.0) - 127.0,
-				sig = bits[0] + bits[1] * 256.0 + floor(mod(bits[2] + 0.1, 128.0)) * 256.0 * 256.0;
-				return sign * (1.0 + sig / 8388607.0) * pow(2.0, expo);
-			}
+			uniform bool littleEndian;
+			uniform int x;
+			uniform int y;
+			uniform sampler2D weight;
+			uniform sampler2D input;
+			${TNT}
 			void main() {
 				
 			}
