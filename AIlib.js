@@ -1,3 +1,4 @@
+
 var LIB = {
     gpuMode:false
 }
@@ -6,55 +7,6 @@ const lE = (function machineIsLittleEndian() {
 	const uint16array = new Uint16Array(uint8Array.buffer);
 	return uint16array[0] === 0xBBAA;
 })();
-var TNT = 
-		`ivec4 floatsToBytes(vec4 inputFloats, bool littleEndian) {
-			ivec4 bytes = ivec4(inputFloats * 255.0);
-			return (
-				littleEndian
-				? bytes.abgr
-				: bytes
-			);
-		}
-		float shiftRight (float v, float amt) {
-			v = floor(v) + 0.5;
-			return floor(v / exp2(amt));
-		}
-		float shiftLeft (float v, float amt) {
-			return floor(v * exp2(amt) + 0.5);
-		}
-		float maskLast (float v, float bits) {
-			return mod(v, shiftLeft(1.0, bits));
-		}
-		float extractBits (float num, float from, float to) {
-			from = floor(from + 0.5); to = floor(to + 0.5);
-			return maskLast(shiftRight(num, from), to - from);
-		}
-		vec4 floatToRgba(float texelFloat, bool littleEndian) {
-			if (texelFloat == 0.0) return vec4(0, 0, 0, 0);
-			float sign = texelFloat > 0.0 ? 0.0 : 1.0;
-			texelFloat = abs(texelFloat);
-			float exponent = floor(log2(texelFloat));
-			float biased_exponent = exponent + 127.0;
-			float fraction = ((texelFloat / exp2(exponent)) - 1.0) * 8388608.0;
-			float t = biased_exponent / 2.0;
-			float last_bit_of_biased_exponent = fract(t) * 2.0;
-			float remaining_bits_of_biased_exponent = floor(t);
-			float byte4 = extractBits(fraction, 0.0, 8.0) / 255.0;
-			float byte3 = extractBits(fraction, 8.0, 16.0) / 255.0;
-			float byte2 = (last_bit_of_biased_exponent * 128.0 + extractBits(fraction, 16.0, 23.0)) / 255.0;
-			float byte1 = (sign * 128.0 + remaining_bits_of_biased_exponent) / 255.0;
-			return (
-				littleEndian
-				? vec4(byte4, byte3, byte2, byte1)
-				: vec4(byte1, byte2, byte3, byte4)
-			);
-		}
-		float rgbaToFloat(vec4 texelRGBA, bool littleEndian) {
-			ivec4 rgbaBytes = floatsToBytes(texelRGBA, littleEndian);
-			bool bits[32];
-			bytesToBits(rgbaBytes, bits);
-			return bitsToFloat(bits);
-		}`;
 var GPU = {
 	setupGPU:(fragment,set,w,h) => {
 		//get webGL context
@@ -139,6 +91,9 @@ var GPU = {
 		}
 	}
 }
+//act func
+var actList = ["reLU","linear","bin","tanh","sig","leakyReLU","paraReLU","ELU"];
+//reLU
 var reLU = (input) => {
 	if (input < 0) {
 		return 0;
@@ -146,9 +101,143 @@ var reLU = (input) => {
 		return input;
 	}
 };
+var reLUWebGL1 = () => {
+	let canvas = document.createElement("canvas");
+	let gl = canvas.getContext("webgl");
+	var ver = `
+		attribute vec4 position;
+		void main() {
+			gl_Position = position;
+		}`,
+	frag = `
+		precision highp float;
+		precision highp int;
+		uniform sampler2D net_input;
+		uniform bool lE;
+		uniform vec2 srcD;
+		//float to rgba
+		float shiftRight (float v, float amt) {
+			v = floor(v) + 0.5;
+			return floor(v / exp2(amt));
+		}
+		float shiftLeft (float v, float amt) {
+			return floor(v * exp2(amt) + 0.5);
+		}
+		float maskLast (float v, float bits) {
+			return mod(v, shiftLeft(1.0, bits));
+		}
+		float extractBits (float num, float from, float to) {
+			from = floor(from + 0.5); to = floor(to + 0.5);
+			return maskLast(shiftRight(num, from), to - from);
+		}
+		vec4 floatToRgba(float texelFloat, bool littleEndian) {
+			if (texelFloat == 0.0) return vec4(0, 0, 0, 0);
+			float sign = texelFloat > 0.0 ? 0.0 : 1.0;
+			texelFloat = abs(texelFloat);
+			float exponent = floor(log2(texelFloat));
+			float biased_exponent = exponent + 127.0;
+			float fraction = ((texelFloat / exp2(exponent)) - 1.0) * 8388608.0;
+			float t = biased_exponent / 2.0;
+			float last_bit_of_biased_exponent = fract(t) * 2.0;
+			float remaining_bits_of_biased_exponent = floor(t);
+			float byte4 = extractBits(fraction, 0.0, 8.0) / 255.0;
+			float byte3 = extractBits(fraction, 8.0, 16.0) / 255.0;
+			float byte2 = (last_bit_of_biased_exponent * 128.0 + extractBits(fraction, 16.0, 23.0)) / 255.0;
+			float byte1 = (sign * 128.0 + remaining_bits_of_biased_exponent) / 255.0;
+			return (
+				littleEndian
+				? vec4(byte4, byte3, byte2, byte1)
+				: vec4(byte1, byte2, byte3, byte4)
+			);
+		}
+		//rgba to float
+		ivec4 floatsToBytes(vec4 inputFloats, bool littleEndian) {
+			ivec4 bytes = ivec4(inputFloats * 255.0);
+			return (
+				littleEndian
+				? bytes.abgr
+				: bytes
+			);
+		}
+		void bytesToBits(const in ivec4 bytes, out bool bits[32]) {
+			for (int channelIndex = 0; channelIndex < 4; ++channelIndex) {
+				  float acc = float(bytes[channelIndex]);
+				  for (int indexInByte = 7; indexInByte >= 0; --indexInByte) {
+					float powerOfTwo = exp2(float(indexInByte));
+					bool bit = acc >= powerOfTwo;
+					bits[channelIndex * 8 + (7 - indexInByte)] = bit;
+					acc = mod(acc, powerOfTwo);
+				  }
+			}
+		}
+		float getExponent(bool bits[32]) {
+			const int startIndex = 1;
+			const int bitStringLength = 8;
+			const int endBeforeIndex = startIndex + bitStringLength;
+			float acc = 0.0;
+			int pow2 = bitStringLength - 1;
+			for (int bitIndex = startIndex; bitIndex < endBeforeIndex; ++bitIndex) {
+				  acc += float(bits[bitIndex]) * exp2(float(pow2--));
+			}
+			return acc;
+		}
+		float getMantissa(bool bits[32], bool subnormal) {
+			const int startIndex = 9;
+			const int bitStringLength = 23;
+			const int endBeforeIndex = startIndex + bitStringLength;
+			// Leading/implicit/hidden bit convention:
+			// If the number is not subnormal (with exponent 0), we add a leading 1 digit.
+			float acc = float(!subnormal) * exp2(float(bitStringLength));
+			int pow2 = bitStringLength - 1;
+			for (int bitIndex = startIndex; bitIndex < endBeforeIndex; ++bitIndex) {
+				  acc += float(bits[bitIndex]) * exp2(float(pow2--));
+			}
+			return acc;
+		}
+		float bitsToFloat(bool bits[32]) {
+			float signBit = float(bits[0]) * -2.0 + 1.0;
+			float exponent = getExponent(bits);
+			bool subnormal = abs(exponent - 0.0) < 0.01;
+			float mantissa = getMantissa(bits, subnormal);
+			float exponentBias = 127.0;
+			return signBit * mantissa * exp2(exponent - exponentBias - 23.0);
+		}
+		float rgbaToFloat(vec4 texelRGBA, bool littleEndian) {
+			ivec4 rgbaBytes = floatsToBytes(texelRGBA, littleEndian);
+			bool bits[32];
+			bytesToBits(rgbaBytes, bits);
+			return bitsToFloat(bits);
+		}
+		float node_input
+		,result;
+		void main() {
+			vec2 texcoord = gl_FragCoord.xy / srcD;
+			node_input = rgbaToFloat(texture2D(net_input,vec2(texcoord.x,texcoord.y)),lE);
+			if (node_input < 0.0) {
+				result = 0.0;
+			} else {
+				result = node_input;
+			}
+			gl_FragColor = floatToRgba(result,lE);
+		}`;
+	var fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+	gl.shaderSource(fragmentShader, frag);
+	gl.compileShader(fragmentShader);
+	var vertexShader = gl.createShader(gl.VERTEX_SHADER);
+	gl.shaderSource(vertexShader, ver);
+	gl.compileShader(vertexShader);
+	var program = gl.createProgram();
+	gl.attachShader(program, vertexShader);
+	gl.attachShader(program, fragmentShader);
+	gl.linkProgram(program);
+	gl.useProgram(program);
+	return [gl,program,canvas];
+}
+//linear
 var linear = (input,m,b) => {
 	return input*m + b;
 }
+//bin
 var bin = (input) => {
 	if (input < 0) {
 		return 0;
@@ -156,12 +245,15 @@ var bin = (input) => {
 		return 1;
 	}
 }
+//tanh
 var tanh = (input) => {
 	return Math.tanh(input);
 }
+//sig
 var sig  = (input) => {
 	return 1 / 1 + (Math.E ** -input);
 }
+//leakyReLU
 var leakyReLU = (input) => {
 	if (input >= 0) {
 		return input;
@@ -169,6 +261,7 @@ var leakyReLU = (input) => {
 		return input * 0.01;
 	}
 }
+//para
 var paraReLU = (input,a) => {
 	if (input >= 0) {
 		return input;
@@ -176,6 +269,7 @@ var paraReLU = (input,a) => {
 		return input * a;
 	}
 }
+//ELU
 var ELU = (input,a) => {
 	if (input >= 0) {
 		return input;
@@ -192,8 +286,8 @@ function checkWebGL() {
         sup = true;
         type = 1;
     }
-    let gl2 = document.createElement('canvas').getContext('webgl2');
-    if (gl2) {
+    gl1 = document.createElement('canvas').getContext('webgl2');
+    if (gl1) {
         sup = true;
         type += 2;
     }
@@ -208,12 +302,35 @@ function checkWebGL() {
     }
     return [sup,type];
 }
+///
 function weiGen(lt) {
     let wei = [];
     for (let i = 0;i < lt;i++) {
         wei.push(Math.random());
     }
     return wei;
+}
+///
+function createTexture(gl, data, width, height) {
+	const tex = gl.createTexture();
+	gl.bindTexture(gl.TEXTURE_2D, tex);
+	gl.texImage2D(
+		gl.TEXTURE_2D,
+		0,
+		gl.RGBA,
+		width,
+		height,
+		0,
+		gl.RGBA,
+		gl.UNSIGNED_BYTE,
+		new Uint8Array(data.buffer),
+		null
+	);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+	return tex;
 }
 ///
 function ANN(lr,mo,act) {
@@ -224,13 +341,17 @@ function ANN(lr,mo,act) {
 	this.netData = [];
 	this.propageGPU;
 	this.actGPU;
+	this.bul;
 	this.canvas = [];
+	this.loop = 0;
+	////
 	if (LIB.gpuMode) {
 		this.wGS = checkWebGL();
 		if (this.wGS[0]) {
 			this.s = this.wGS[1];
 		}
 	}
+	////
 	this.PropageWebGL1 = () => {
 		let canvas = document.createElement("canvas");
 		let gl = canvas.getContext("webgl");
@@ -242,47 +363,152 @@ function ANN(lr,mo,act) {
 		frag = `
 			precision highp float;
 			precision highp int;
-			uniform bool littleEndian;
-			uniform int x;
-			uniform int y;
 			uniform sampler2D weight;
-			uniform sampler2D input;
-			${TNT}
-			void main() {
-				
+			uniform sampler2D net_input;
+			uniform bool lE;
+			uniform vec2 srcD;
+			//float to rgba
+			float shiftRight (float v, float amt) {
+				v = floor(v) + 0.5;
+				return floor(v / exp2(amt));
 			}
-			gl_FragColor = encode_float(sum);
-		}`;
+			float shiftLeft (float v, float amt) {
+				return floor(v * exp2(amt) + 0.5);
+			}
+			float maskLast (float v, float bits) {
+				return mod(v, shiftLeft(1.0, bits));
+			}
+			float extractBits (float num, float from, float to) {
+				from = floor(from + 0.5); to = floor(to + 0.5);
+				return maskLast(shiftRight(num, from), to - from);
+			}
+			vec4 floatToRgba(float texelFloat, bool littleEndian) {
+				if (texelFloat == 0.0) return vec4(0, 0, 0, 0);
+				float sign = texelFloat > 0.0 ? 0.0 : 1.0;
+				texelFloat = abs(texelFloat);
+				float exponent = floor(log2(texelFloat));
+				float biased_exponent = exponent + 127.0;
+				float fraction = ((texelFloat / exp2(exponent)) - 1.0) * 8388608.0;
+				float t = biased_exponent / 2.0;
+				float last_bit_of_biased_exponent = fract(t) * 2.0;
+				float remaining_bits_of_biased_exponent = floor(t);
+				float byte4 = extractBits(fraction, 0.0, 8.0) / 255.0;
+				float byte3 = extractBits(fraction, 8.0, 16.0) / 255.0;
+				float byte2 = (last_bit_of_biased_exponent * 128.0 + extractBits(fraction, 16.0, 23.0)) / 255.0;
+				float byte1 = (sign * 128.0 + remaining_bits_of_biased_exponent) / 255.0;
+				return (
+					littleEndian
+					? vec4(byte4, byte3, byte2, byte1)
+					: vec4(byte1, byte2, byte3, byte4)
+				);
+			}
+			//rgba to float
+			ivec4 floatsToBytes(vec4 inputFloats, bool littleEndian) {
+				ivec4 bytes = ivec4(inputFloats * 255.0);
+				return (
+					littleEndian
+					? bytes.abgr
+					: bytes
+				);
+			}
+			void bytesToBits(const in ivec4 bytes, out bool bits[32]) {
+				for (int channelIndex = 0; channelIndex < 4; ++channelIndex) {
+				  	float acc = float(bytes[channelIndex]);
+				  	for (int indexInByte = 7; indexInByte >= 0; --indexInByte) {
+						float powerOfTwo = exp2(float(indexInByte));
+						bool bit = acc >= powerOfTwo;
+						bits[channelIndex * 8 + (7 - indexInByte)] = bit;
+						acc = mod(acc, powerOfTwo);
+				  	}
+				}
+			}
+			float getExponent(bool bits[32]) {
+				const int startIndex = 1;
+				const int bitStringLength = 8;
+				const int endBeforeIndex = startIndex + bitStringLength;
+				float acc = 0.0;
+				int pow2 = bitStringLength - 1;
+				for (int bitIndex = startIndex; bitIndex < endBeforeIndex; ++bitIndex) {
+				  	acc += float(bits[bitIndex]) * exp2(float(pow2--));
+				}
+				return acc;
+			}
+			float getMantissa(bool bits[32], bool subnormal) {
+				const int startIndex = 9;
+				const int bitStringLength = 23;
+				const int endBeforeIndex = startIndex + bitStringLength;
+				// Leading/implicit/hidden bit convention:
+				// If the number is not subnormal (with exponent 0), we add a leading 1 digit.
+				float acc = float(!subnormal) * exp2(float(bitStringLength));
+				int pow2 = bitStringLength - 1;
+				for (int bitIndex = startIndex; bitIndex < endBeforeIndex; ++bitIndex) {
+				  	acc += float(bits[bitIndex]) * exp2(float(pow2--));
+				}
+				return acc;
+			}
+			float bitsToFloat(bool bits[32]) {
+				float signBit = float(bits[0]) * -2.0 + 1.0;
+				float exponent = getExponent(bits);
+				bool subnormal = abs(exponent - 0.0) < 0.01;
+				float mantissa = getMantissa(bits, subnormal);
+				float exponentBias = 127.0;
+				return signBit * mantissa * exp2(exponent - exponentBias - 23.0);
+			}
+			float rgbaToFloat(vec4 texelRGBA, bool littleEndian) {
+				ivec4 rgbaBytes = floatsToBytes(texelRGBA, littleEndian);
+				bool bits[32];
+				bytesToBits(rgbaBytes, bits);
+				return bitsToFloat(bits);
+			}
+			float node_input,
+			wei;
+			void main() {
+				vec2 texcoord = gl_FragCoord.xy / srcD;
+				node_input = rgbaToFloat(texture2D(net_input,vec2(texcoord.y,0.0)),lE);
+				wei = rgbaToFloat(texture2D(weight,vec2(texcoord.x,texcoord.y)),lE);
+				gl_FragColor = floatToRgba(node_input * wei,lE);
+			}`;
 		var fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
 		gl.shaderSource(fragmentShader, frag);
 		gl.compileShader(fragmentShader);
 		var vertexShader = gl.createShader(gl.VERTEX_SHADER);
 		gl.shaderSource(vertexShader, ver);
 		gl.compileShader(vertexShader);
-		program = gl.createProgram();
+		var program = gl.createProgram();
 		gl.attachShader(program, vertexShader);
 		gl.attachShader(program, fragmentShader);
 		gl.linkProgram(program);
 		gl.useProgram(program);
-		return [gl,canvas];
+		return [gl,program,canvas];
 	}
+	////
 	this.PropageWebGL2 = () => {
-		
+
 	}
+	////
     this.setup = (build) => {
-        //s loop
+		this.bul = build;
 		let wei;
-        for (let l = 0,bl = build.length - 1,weiL = [];l < bl;l++) {
-			weiL = [];
-            for (let i = 0,lc = build[l + 1];i < lc;i++) {
-				wei = weiGen(build[l]);
-                weiL.push(wei);
-            }
-            this.weight.push(weiL);
-        }
+		if (this.s == 0) {
+			for (let l = 0,bl = build.length - 1,weiL = [];l < bl;l++) {
+				weiL = [];
+				for (let i = 0,lc = build[l + 1];i < lc;i++) {
+					wei = weiGen(build[l]);
+					weiL.push(wei);
+				}
+				this.weight.push(weiL);
+			}
+		} else {
+			for (let l = 0,bl = build.length - 1,weiL = [];l < bl;l++) {
+				weiL = [];
+				wei = weiGen(build[l] * build[l + 1]);
+				weiL.push(wei);
+				this.weight.push(weiL);
+			}
+		}
 		return this.weight;
-        //end loop
     }
+	////
 	this.Node = (input,weight) => {
 		let output = 0;
 		for (let i = 0,len = weight.length;i < len;i++) {
@@ -290,6 +516,7 @@ function ANN(lr,mo,act) {
 		}
 		return output;
 	}
+	////
 	this.Perceptron = (input,weight,act,a) => {
 		let output = []
 		,net = []
@@ -302,31 +529,91 @@ function ANN(lr,mo,act) {
 		this.nodeData.push(output);
 		return output;
 	}
+	////
 	this.getContextWebGL1 = (act) => {
 		this.propageGPU = this.PropageWebGL1();
 		this.actGPU = window[act + "WebGL1"]();
 	}
+	////
 	this.getContextWebGL2 = (act) => {
 		this.propageGPU = this.PropageWebGL2();
 		this.actGPU = window[act + "WebGL2"]();
 	}
+	////
     this.propagation = (input) => {
 		var webGL;
 		if (this.s == 0) {
 			let netIn = input;
 			for (let l = 0,len = this.weight.length;l < len;l++) {
-				netIn = this.Perceptron(netIn,this.weight[l],"reLU",0);
+				netIn = this.Perceptron(netIn,this.weight[l],act,0);
 			}
 			return  netIn;
-		} else if (this.s == 3) {
+		} else if (this.s == 3) {//CTDSKX
 			this.getContextWebGL1(act);
-		} else {
+		} else if (this.s == 2) {
 			this.getContextWebGL2(act);
 		}
-		return (input) => {
-			var _that = this;
-		};
+		if (this.s ==3) {//CTDSKX
+			return (input) => {
+				this.loop = 0;
+				console.log(this.loop);
+				let loopCount = this.weight.length,
+				glPro = this.propageGPU[0],
+				proGramPro = this.propageGPU[1],
+				canPro = this.propageGPU[2],
+				bul = this.bul,
+				nodeIn = input,
+				bulLoop1,
+				bulLoop;
+				if (this.loop < loopCount) {
+					this.loop++;
+					bulLoop1 = bul[this.loop - 1];
+					bulLoop = bul[this.loop];
+					const positionLoc = glPro.getAttribLocation(proGramPro, 'position');
+					const wei = glPro.getUniformLocation(proGramPro, 'weight');
+					const input = glPro.getUniformLocation(proGramPro, 'net_input');
+					const srcDimensionsLoc = glPro.getUniformLocation(proGramPro, 'srcD');
+					const littleE = glPro.getUniformLocation(proGramPro, 'lE');
+					const buffer = glPro.createBuffer();
+					glPro.bindBuffer(glPro.ARRAY_BUFFER, buffer);
+					glPro.bufferData(glPro.ARRAY_BUFFER, new Float32Array([
+					-1, -1,
+					1, -1,
+					-1,  1,
+					-1,  1,
+					1, -1,
+					1,  1,
+					]), glPro.STATIC_DRAW);
+					glPro.enableVertexAttribArray(positionLoc);
+					glPro.vertexAttribPointer(
+						positionLoc,
+						2,
+						glPro.FLOAT,
+						false,
+						0,
+						0,
+					);
+					glPro.uniform2fv(srcDimensionsLoc, [bulLoop1,bulLoop]);
+					glPro.uniform1i(littleE, lE);
+					glPro.uniform1i(this.weight, 0);
+					glPro.activeTexture(glPro.TEXTURE0);
+					glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,this.weight[loop - 1],bulLoop1,bulLoop));
+					glPro.uniform1i(net_input, 1);
+					glPro.activeTexture(gl.TEXTURE0 + 1);
+					glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,nodeIn,bulLoop1,bulLoop));
+					glPro.drawArrays(glPro.TRIANGLES, 0, 6);
+					var output = new Uint8Array((bulLoop1 * bulLoop) * 4);
+					glPro.readPixels(0, 0, bulLoop1,bulLoop, glPro.RGBA, glPro.UNSIGNED_BYTE, output);
+					requestAnimationFrame(layerPropagation);
+				}
+			};
+		} else {
+			return (input) => {
+				var _that = this;
+			};
+		}
     }
+	////
 	this.backpropagation = (out,pOut) => {
 
 	}
