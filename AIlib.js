@@ -344,6 +344,8 @@ function ANN(lr,mo,act) {
 	this.bul;
 	this.canvas = [];
 	this.loop = 0;
+	this.input;
+	this.output;
 	////
 	if (LIB.gpuMode) {
 		this.wGS = checkWebGL();
@@ -500,10 +502,8 @@ function ANN(lr,mo,act) {
 			}
 		} else {
 			for (let l = 0,bl = build.length - 1,weiL = [];l < bl;l++) {
-				weiL = [];
 				wei = weiGen(build[l] * build[l + 1]);
-				weiL.push(wei);
-				this.weight.push(weiL);
+				this.weight.push(wei);
 			}
 		}
 		return this.weight;
@@ -554,58 +554,57 @@ function ANN(lr,mo,act) {
 			this.getContextWebGL2(act);
 		}
 		if (this.s ==3) {//CTDSKX
-			return (input) => {
-				this.loop = 0;
+			return () => {
 				console.log(this.loop);
-				let loopCount = this.weight.length,
-				glPro = this.propageGPU[0],
+				let glPro = this.propageGPU[0],
 				proGramPro = this.propageGPU[1],
 				canPro = this.propageGPU[2],
 				bul = this.bul,
-				nodeIn = input,
 				bulLoop1,
-				bulLoop;
-				if (this.loop < loopCount) {
-					this.loop++;
-					bulLoop1 = bul[this.loop - 1];
-					bulLoop = bul[this.loop];
-					const positionLoc = glPro.getAttribLocation(proGramPro, 'position');
-					const wei = glPro.getUniformLocation(proGramPro, 'weight');
-					const input = glPro.getUniformLocation(proGramPro, 'net_input');
-					const srcDimensionsLoc = glPro.getUniformLocation(proGramPro, 'srcD');
-					const littleE = glPro.getUniformLocation(proGramPro, 'lE');
-					const buffer = glPro.createBuffer();
-					glPro.bindBuffer(glPro.ARRAY_BUFFER, buffer);
-					glPro.bufferData(glPro.ARRAY_BUFFER, new Float32Array([
-					-1, -1,
-					1, -1,
-					-1,  1,
-					-1,  1,
-					1, -1,
-					1,  1,
-					]), glPro.STATIC_DRAW);
-					glPro.enableVertexAttribArray(positionLoc);
-					glPro.vertexAttribPointer(
-						positionLoc,
-						2,
-						glPro.FLOAT,
-						false,
-						0,
-						0,
-					);
-					glPro.uniform2fv(srcDimensionsLoc, [bulLoop1,bulLoop]);
-					glPro.uniform1i(littleE, lE);
-					glPro.uniform1i(this.weight, 0);
-					glPro.activeTexture(glPro.TEXTURE0);
-					glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,this.weight[loop - 1],bulLoop1,bulLoop));
-					glPro.uniform1i(net_input, 1);
-					glPro.activeTexture(gl.TEXTURE0 + 1);
-					glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,nodeIn,bulLoop1,bulLoop));
-					glPro.drawArrays(glPro.TRIANGLES, 0, 6);
-					var output = new Uint8Array((bulLoop1 * bulLoop) * 4);
-					glPro.readPixels(0, 0, bulLoop1,bulLoop, glPro.RGBA, glPro.UNSIGNED_BYTE, output);
-					requestAnimationFrame(layerPropagation);
-				}
+				bulLoop,
+				output;
+				this.loop++;
+				console.log(this.loop);
+				bulLoop1 = bul[this.loop - 1];
+				bulLoop = bul[this.loop];
+				const positionLoc = glPro.getAttribLocation(proGramPro, 'position');
+				const wei = glPro.getUniformLocation(proGramPro, 'weight');
+				const net_input = glPro.getUniformLocation(proGramPro, 'net_input');
+				const srcDimensionsLoc = glPro.getUniformLocation(proGramPro, 'srcD');
+				const littleE = glPro.getUniformLocation(proGramPro, 'lE');
+				const buffer = glPro.createBuffer();
+				glPro.bindBuffer(glPro.ARRAY_BUFFER, buffer);
+				glPro.bufferData(glPro.ARRAY_BUFFER, new Float32Array([
+				-1, -1,
+				1, -1,
+				-1,  1,
+				-1,  1,
+				1, -1,
+				1,  1,
+				]), glPro.STATIC_DRAW);
+				glPro.enableVertexAttribArray(positionLoc);
+				glPro.vertexAttribPointer(
+					positionLoc,
+					2,
+					glPro.FLOAT,
+					false,
+					0,
+					0,
+				);
+				glPro.uniform2fv(srcDimensionsLoc, [bulLoop1,bulLoop]);
+				glPro.uniform1i(littleE, lE);
+				glPro.uniform1i(wei, 0);
+				glPro.activeTexture(glPro.TEXTURE0);
+				glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,new Float32Array(this.weight[this.loop - 1]),bulLoop1,bulLoop));
+				glPro.uniform1i(net_input, 1);
+				glPro.activeTexture(glPro.TEXTURE0 + 1);
+				glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,new Float32Array(this.input),bulLoop1,bulLoop));
+				glPro.drawArrays(glPro.TRIANGLES, 0, 6);
+				output = new Uint8Array((bulLoop1 * bulLoop) * 4);
+				glPro.readPixels(0, 0, bulLoop1,bulLoop, glPro.RGBA, glPro.UNSIGNED_BYTE, output);
+				console.log(output);
+				this.input = output;
+				this.output = output;
 			};
 		} else {
 			return (input) => {
@@ -613,6 +612,16 @@ function ANN(lr,mo,act) {
 			};
 		}
     }
+	////
+	this.run = (input,pro) => {
+		this.input = input;
+		loopCount = this.weight.length + 2;
+		this.loop = 0;
+		requestAnimationFrame(pro);
+		if (this.loop < loopCount) {
+			requestAnimationFrame(pro);
+		}
+	}
 	////
 	this.backpropagation = (out,pOut) => {
 
