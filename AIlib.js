@@ -555,7 +555,6 @@ function ANN(lr,mo,act) {
 		}
 		if (this.s ==3) {//CTDSKX
 			return () => {
-				console.log(this.loop);
 				let glPro = this.propageGPU[0],
 				proGramPro = this.propageGPU[1],
 				canPro = this.propageGPU[2],
@@ -564,7 +563,6 @@ function ANN(lr,mo,act) {
 				bulLoop,
 				output;
 				this.loop++;
-				console.log(this.loop);
 				bulLoop1 = bul[this.loop - 1];
 				bulLoop = bul[this.loop];
 				const positionLoc = glPro.getAttribLocation(proGramPro, 'position');
@@ -597,30 +595,33 @@ function ANN(lr,mo,act) {
 				glPro.activeTexture(glPro.TEXTURE0);
 				glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,new Float32Array(this.weight[this.loop - 1]),bulLoop1,bulLoop));
 				glPro.uniform1i(net_input, 1);
-				glPro.activeTexture(glPro.TEXTURE0 + 1);
-				glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,new Float32Array(this.input),bulLoop1,bulLoop));
+				glPro.activeTexture(glPro.TEXTURE1);
+				glPro.bindTexture(glPro.TEXTURE_2D,createTexture(glPro,new Float32Array(this.input),bulLoop1,1));
+				canPro.width = bulLoop1;
+				canPro.width = bulLoop;
 				glPro.drawArrays(glPro.TRIANGLES, 0, 6);
 				output = new Uint8Array((bulLoop1 * bulLoop) * 4);
 				glPro.readPixels(0, 0, bulLoop1,bulLoop, glPro.RGBA, glPro.UNSIGNED_BYTE, output);
+				output = new Float32Array(output.buffer);
 				console.log(output);
 				this.input = output;
 				this.output = output;
 			};
 		} else {
 			return (input) => {
-				var _that = this;
 			};
 		}
     }
 	////
 	this.run = (input,pro) => {
 		this.input = input;
-		loopCount = this.weight.length + 2;
+		loopCount = this.weight.length;
 		this.loop = 0;
-		requestAnimationFrame(pro);
+		pro();
 		if (this.loop < loopCount) {
-			requestAnimationFrame(pro);
+			requestAnimationFrame(this.run);
 		}
+		return this.output;
 	}
 	////
 	this.backpropagation = (out,pOut) => {
